@@ -94,6 +94,57 @@ options:
 
 ---
 
+## 🔍 Deep Dive: The "Antigravity Problem" Explained
+
+If you are using **Google Antigravity IDE**, you have likely encountered this exact failure mode when trying to connect Figma:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ figma  OAUTH                                               │
+│ Used for: figma (MCP)                                      │
+│ Domains: mcp.figma.com                                     │
+│ Scopes: mcp:connect                                        │
+│                                                            │
+│ Paste the code shown after you sign in. Restart sign-in    │
+│ [ Paste code                     ] [ Submit ]              │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Why Antigravity Gets Stuck:
+
+#### 1. The Electron `window.open` Sandbox Block
+When you click **"Sign in"** or **"Restart sign-in"** in Antigravity's **Plugins > Accounts** tab, the frontend UI (`workbench.desktop.main.js`) executes:
+```javascript
+AB(window, ke.authUrl, "_blank", "noopener,noreferrer"); // calls window.open(...)
+```
+In Antigravity's Electron architecture, calls to `window.open` inside the plugin accounts webview are not routed to Electron's `shell.openExternal()`. Consequently, **no browser window opens**, and nothing happens on screen. The UI switches to `lat.PASTE` mode, leaving you staring at an empty `[Paste code]` box with no URL to visit.
+
+#### 2. The Ephemeral PKCE Mismatch (`invalid_grant`)
+When users try to work around this by manually creating an OAuth app in Figma, authorizing in their own browser, and pasting the resulting code into Antigravity's `[Paste code]` box, Antigravity's Language Server (`CompleteMcpOAuth`) immediately rejects it:
+
+```log
+interceptor.go:70] /exa.language_server_pb.LanguageServerService/CompleteMcpOAuth: 
+failed to exchange code for token: oauth2: "invalid_grant" "An error occurred processing your request"
+```
+
+**Why this happens:**
+During the initial handshake, Antigravity's internal language server registered a dynamic client with an ephemeral PKCE `code_verifier` and set `redirect_uri=https://antigravity.google/oauth-callback`. If you paste a code obtained through a different client, different verifier, or different redirect URI, RFC 6749 requires Figma's token endpoint to reject the exchange with `invalid_grant`.
+
+#### 3. How `figma-mcp-oauth` Solves It
+`figma-mcp-oauth` completely bypasses the broken in-IDE webview flow:
+1. Performs Dynamic Client Registration (RFC 7591) independently with an allowlisted client profile.
+2. Generates a fresh, matched PKCE pair (`code_verifier` + `S256 code_challenge`).
+3. Launches your real OS browser directly using system process calls (bypassing Electron's webview sandbox).
+4. Catches the callback on `http://127.0.0.1:3344/callback`.
+5. Exchanges the token successfully without `invalid_grant`.
+6. Auto-injects the resulting Bearer token into Antigravity's configuration files:
+   * `~/.gemini/config/mcp_config.json`
+   * `~/.gemini/antigravity-ide/mcp_config.json`
+
+Once injected, Antigravity instantly establishes a connection to `https://mcp.figma.com/mcp` as `figma-remote`, granting full access to all 42 Figma MCP tools (canvas writes via `use_figma`, Dev Mode code inspection, token extraction, etc.) without touching the broken accounts UI.
+
+---
+
 ## 🛠️ Editor Configurations
 
 If you prefer to configure your editor manually, add the following entry to your MCP configuration file using the generated access token:
@@ -203,3 +254,4 @@ python figma_mcp_auth.py --refresh
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
