@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "figma-remote": {
+      "url": "https://mcp.figma.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_FIGMA_OAUTH_ACCESS_TOKEN"
+      }
+    }
+  }
+}
